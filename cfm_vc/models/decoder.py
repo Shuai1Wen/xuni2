@@ -107,17 +107,21 @@ class DecoderVAE(nn.Module):
         # 拼接潜变量
         h = torch.cat([z_int, z_tech], dim=-1)  # (B, dim_int + dim_tech)
         
-        # 通过MLP
-        h = F.relu(self.fc1(h))  # (B, hidden_dim)
+        # 通过MLP（使用in-place操作减少内存）
+        h = F.relu(self.fc1(h), inplace=True)  # (B, hidden_dim)
         h = self.dropout1(h)
-        h = F.relu(self.fc2(h))  # (B, hidden_dim)
+        h = F.relu(self.fc2(h), inplace=True)  # (B, hidden_dim)
         h = self.dropout2(h)
         
-        # 均值：exp确保为正（数值稳定）
-        mean = torch.exp(self.mean_out(h))  # (B, n_genes)，全为正
-        
-        # 分散参数：exp确保为正
-        theta = torch.exp(self.log_theta)  # (n_genes,)，全为正
+        # 均值：使用softplus或clamped exp确保为正且数值稳定
+        # 限制mean_out的输出范围，防止exp溢出
+        mean_logits = self.mean_out(h)
+        mean_logits = torch.clamp(mean_logits, min=-20.0, max=20.0)  # exp(-20) ≈ 2e-9, exp(20) ≈ 4.8e8
+        mean = torch.exp(mean_logits)  # (B, n_genes)，全为正
+
+        # 分散参数：同样限制范围防止溢出
+        log_theta_clamped = torch.clamp(self.log_theta, min=-10.0, max=10.0)
+        theta = torch.exp(log_theta_clamped)  # (n_genes,)，全为正
         
         return mean, theta
 

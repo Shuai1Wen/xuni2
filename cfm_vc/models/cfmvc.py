@@ -251,11 +251,12 @@ class CFMVCModel(nn.Module):
         
         batch_size, dim = z_int.shape
         device = z_int.device
-        
+
         # ============ OT路径构建 ============
         # z_1 = VAE编码的z_int
-        # ⚠️ 梯度关键：如果要冻结VAE，z_int应该已经detach
-        z1 = z_int  # 假设已在外部detach
+        # ⚠️ 梯度安全：显式detach防止梯度反传到VAE
+        # 无论外部是否已detach，这里都确保安全
+        z1 = z_int.detach()  # 显式detach，确保梯度安全
         
         # z_0 ~ N(0, I)
         z0 = torch.randn_like(z1)
@@ -291,15 +292,18 @@ class CFMVCModel(nn.Module):
         if lambda_dist > 0:
             # 简化版本：用z1的统计信息
             # 完整版本应该从flow采样z1_hat，计算MMD或ED
-            z1_mean = torch.mean(z1, dim=0, keepdim=True)
-            z1_std = torch.std(z1, dim=0, keepdim=True) + 1e-8
-            
-            # 标准化z1
-            z1_norm = (z1 - z1_mean) / z1_std
-            
+            # ⚠️ 注意：z1已经detach，所以这个损失不会影响VAE
+            with torch.no_grad():  # 确保统计量计算不引入梯度
+                z1_mean = torch.mean(z1, dim=0, keepdim=True)
+                z1_std = torch.std(z1, dim=0, keepdim=True)
+
+            # 安全的标准化，防止除零
+            z1_std_safe = torch.clamp(z1_std, min=1e-6)
+            z1_norm = (z1 - z1_mean) / z1_std_safe
+
             # 与N(0,I)的距离（简化的MMD）
-            dist_loss = torch.mean(z1_norm ** 2) - 1.0
-            dist_loss = torch.clamp(dist_loss, min=0.0)  # 避免负值
+            # 使用绝对值形式，避免负值
+            dist_loss = torch.abs(torch.mean(z1_norm ** 2) - 1.0)
         
         # ============ 总损失 ============
         total_loss = fm_loss + lambda_dist * dist_loss

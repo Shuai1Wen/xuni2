@@ -141,10 +141,10 @@ class EncoderVAE(nn.Module):
         # 拼接所有输入
         h = torch.cat([x, batch_e, ct_e], dim=-1)  # (B, n_genes+16)
         
-        # 通过MLP
-        h = F.relu(self.fc1(h))  # (B, hidden_dim)
+        # 通过MLP（使用in-place操作减少内存）
+        h = F.relu(self.fc1(h), inplace=True)  # (B, hidden_dim)
         h = self.dropout1(h)
-        h = F.relu(self.fc2(h))  # (B, hidden_dim)
+        h = F.relu(self.fc2(h), inplace=True)  # (B, hidden_dim)
         h = self.dropout2(h)
         
         # z_int 的参数
@@ -160,12 +160,17 @@ class EncoderVAE(nn.Module):
         z_int_logvar = torch.clamp(z_int_logvar, self.logvar_min, self.logvar_max)
         z_tech_logvar = torch.clamp(z_tech_logvar, self.logvar_min, self.logvar_max)
         
-        # 重参数化技巧
-        eps_int = torch.randn_like(z_int_mean)  # (B, dim_int)
-        eps_tech = torch.randn_like(z_tech_mean)  # (B, dim_tech)
-        
-        z_int = z_int_mean + eps_int * torch.exp(0.5 * z_int_logvar)
-        z_tech = z_tech_mean + eps_tech * torch.exp(0.5 * z_tech_logvar)
+        # 重参数化技巧（训练时采样，eval时使用均值）
+        if self.training:
+            eps_int = torch.randn_like(z_int_mean)  # (B, dim_int)
+            eps_tech = torch.randn_like(z_tech_mean)  # (B, dim_tech)
+
+            z_int = z_int_mean + eps_int * torch.exp(0.5 * z_int_logvar)
+            z_tech = z_tech_mean + eps_tech * torch.exp(0.5 * z_tech_logvar)
+        else:
+            # eval模式：使用确定性编码（均值），减少方差
+            z_int = z_int_mean
+            z_tech = z_tech_mean
         
         # ============ KL散度计算 ============
         # KL(N(μ,σ²) || N(0,I)) = -0.5 * sum(1 + log(σ²) - μ² - σ²)
